@@ -1,0 +1,147 @@
+package cmd
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+
+	"github.com/spf13/cobra"
+)
+
+// file flag
+var file string
+
+// logsCmd analyzes access logs for attacks and patterns
+var logsCmd = &cobra.Command{
+	Use:   "logs",
+	Short: "Analyze access logs for attacks and patterns",
+	Run: func(cmd *cobra.Command, args []string) {
+
+		// Open the log file
+		f, err := os.Open(file)
+		if err != nil {
+			fmt.Println("Error opening file:", err)
+			return
+		}
+		defer f.Close()
+
+		// Initialize counters and maps OUTSIDE the loop
+		ipCount := make(map[string]int)
+		wpLoginAttempts := make(map[string]int)
+		suspiciousIPs := make(map[string]bool)
+		var errorCount int
+
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			// Split line into parts
+			parts := strings.Split(line, " ")
+			if len(parts) < 8 {
+				continue // skip invalid lines
+			}
+
+			ip := parts[0]
+			status := parts[len(parts)-4]
+			request := strings.Join(parts[5:8], " ") // "GET /path HTTP/1.1"
+
+			// Count IP occurrences
+			ipCount[ip]++
+
+			// Detect wp-login brute force
+			if strings.Contains(request, "/wp-login.php") {
+				wpLoginAttempts[ip]++
+				if wpLoginAttempts[ip] > 20 {
+					suspiciousIPs[ip] = true
+				}
+			}
+
+			// Count errors (4xx and 5xx)
+			if strings.HasPrefix(status, "4") || strings.HasPrefix(status, "5") {
+				errorCount++
+			}
+
+			// Suspicious paths
+			suspiciousPatterns := []string{".env", "../", "..\\", "phpmyadmin"}
+			for _, pattern := range suspiciousPatterns {
+				if strings.Contains(strings.ToLower(request), pattern) {
+					suspiciousIPs[ip] = true
+					break
+				}
+			}
+
+			// Optional: detect SQL injection attempts
+			lower := strings.ToLower(line)
+			if strings.Contains(lower, "union select") || strings.Contains(lower, "' or 1=1") {
+				fmt.Println("💀 SQL Injection attempt from:", ip)
+				suspiciousIPs[ip] = true
+			}
+
+			// Optional: detect path traversal
+			if strings.Contains(request, "../") {
+				fmt.Println("📁 Path traversal attempt from:", ip)
+				suspiciousIPs[ip] = true
+			}
+		}
+
+		// ---- SORT TOP IPS ----
+		type kv struct {
+			Key   string
+			Value int
+		}
+		var sortedIPs []kv
+		var sortedbruteforceIPs []kv
+
+		for k, v := range ipCount {
+			sortedIPs = append(sortedIPs, kv{k, v})
+		}
+
+		sort.Slice(sortedIPs, func(i, j int) bool {
+			return sortedIPs[i].Value > sortedIPs[j].Value
+		})
+
+		// ---- OUTPUT ----
+		fmt.Println("\n🔥 Top 10 IPs:")
+		for i, kv := range sortedIPs {
+			if i >= 10 {
+				break
+			}
+			fmt.Printf("%s => %d requests\n", kv.Key, kv.Value)
+		}
+
+		// change map into slice format with struct kv
+		for k, v := range wpLoginAttempts {
+			sortedbruteforceIPs = append(sortedbruteforceIPs, kv{k, v})
+		}
+		// sort
+		sort.Slice(sortedbruteforceIPs, func(i, j int) bool {
+			return sortedbruteforceIPs[i].Value > sortedbruteforceIPs[j].Value
+		})
+
+		fmt.Println("\n🚨 wp-login brute force attempts:")
+		for i, kv := range sortedbruteforceIPs {
+			if i >= 10 {
+				break
+			}
+			fmt.Printf("%s => %d attempts\n", kv.Key, kv.Value)
+
+		}
+
+		fmt.Println("\n⚠️ Total errors (4xx/5xx):", errorCount)
+
+		fmt.Println("\n🕵️ Suspicious IPs:")
+		for ip := range suspiciousIPs {
+			fmt.Println(ip)
+		}
+	},
+}
+
+// init adds the command and its flags
+func init() {
+	rootCmd.AddCommand(logsCmd)
+
+	logsCmd.Flags().StringVarP(&file, "file", "f", "", "Log file path")
+	logsCmd.MarkFlagRequired("file")
+}
