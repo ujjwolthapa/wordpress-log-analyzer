@@ -30,7 +30,7 @@ var logsCmd = &cobra.Command{
 		// Initialize counters and maps OUTSIDE the loop
 		ipCount := make(map[string]int)
 		wpLoginAttempts := make(map[string]int)
-		suspiciousIPs := make(map[string]bool)
+		suspiciousIPs := make(map[string][]string) // Changed to store reasons
 		var errorCount int
 
 		scanner := bufio.NewScanner(f)
@@ -55,7 +55,7 @@ var logsCmd = &cobra.Command{
 			if strings.Contains(request, "/wp-login.php") {
 				wpLoginAttempts[ip]++
 				if wpLoginAttempts[ip] > 20 {
-					suspiciousIPs[ip] = true
+					suspiciousIPs[ip] = append(suspiciousIPs[ip], fmt.Sprintf("wp-login brute force (%d attempts)", wpLoginAttempts[ip]))
 				}
 			}
 
@@ -68,7 +68,7 @@ var logsCmd = &cobra.Command{
 			suspiciousPatterns := []string{".env", "../", "..\\", "phpmyadmin", "xmlrpc.php", "wp-config.php"}
 			for _, pattern := range suspiciousPatterns {
 				if strings.Contains(strings.ToLower(request), pattern) {
-					suspiciousIPs[ip] = true
+					suspiciousIPs[ip] = append(suspiciousIPs[ip], fmt.Sprintf("suspicious path: %s", pattern))
 					break
 				}
 			}
@@ -83,7 +83,7 @@ var logsCmd = &cobra.Command{
 				strings.Contains(lower, "benchmark(") ||
 				strings.Contains(lower, "order by") {
 				fmt.Println("💀 SQL Injection attempt from:", ip)
-				suspiciousIPs[ip] = true
+				suspiciousIPs[ip] = append(suspiciousIPs[ip], "SQL Injection attempt")
 			}
 
 			// Optional: detect path traversal / LFI
@@ -94,7 +94,7 @@ var logsCmd = &cobra.Command{
 				strings.Contains(lower, "/var/log/apache2/access.log") ||
 				strings.Contains(lower, "../../../../") { // Deeper traversal
 				fmt.Println("📁 Path traversal/LFI attempt from:", ip)
-				suspiciousIPs[ip] = true
+				suspiciousIPs[ip] = append(suspiciousIPs[ip], "Path traversal/LFI attempt")
 			}
 
 			// Optional: detect XSS attempts
@@ -106,7 +106,7 @@ var logsCmd = &cobra.Command{
 				strings.Contains(lower, "onmouseover=") ||
 				strings.Contains(lower, "data:text/html") {
 				fmt.Println("💉 XSS attempt from:", ip)
-				suspiciousIPs[ip] = true
+				suspiciousIPs[ip] = append(suspiciousIPs[ip], "XSS attempt")
 			}
 
 			// Optional: detect Remote File Inclusion (RFI) attempts
@@ -114,7 +114,7 @@ var logsCmd = &cobra.Command{
 				(strings.Contains(lower, "?file=") || strings.Contains(lower, "?page=") ||
 					strings.Contains(lower, "?url=") || strings.Contains(lower, "?include=")) {
 				fmt.Println("☁️ RFI attempt from:", ip)
-				suspiciousIPs[ip] = true
+				suspiciousIPs[ip] = append(suspiciousIPs[ip], "RFI attempt")
 			}
 
 			// Optional: detect RCE (Remote Code Execution) / Command Injection attempts
@@ -125,18 +125,15 @@ var logsCmd = &cobra.Command{
 				strings.Contains(lower, "shell_exec(") ||
 				strings.Contains(lower, "phpinfo()") ||
 				strings.Contains(lower, "wget ") ||
-				strings.Contains(lower, "curl ") ||
-				strings.Contains(lower, ";") || // Command separator
-				strings.Contains(lower, "|") || // Pipe
-				strings.Contains(lower, "&&") { // Logical AND
+				strings.Contains(lower, "curl ") {
 				fmt.Println("💻 RCE/Command Injection attempt from:", ip)
-				suspiciousIPs[ip] = true
+				suspiciousIPs[ip] = append(suspiciousIPs[ip], "RCE/Command Injection attempt")
 			}
 
 			// Optional: detect WordPress debug log access
 			if strings.Contains(lower, "debug.log") {
 				fmt.Println("🐛 WordPress debug log access attempt from:", ip)
-				suspiciousIPs[ip] = true
+				suspiciousIPs[ip] = append(suspiciousIPs[ip], "WordPress debug log access attempt")
 			}
         }
 
@@ -186,8 +183,8 @@ var logsCmd = &cobra.Command{
 		fmt.Println("\n⚠️ Total errors (4xx/5xx):", errorCount)
 
 		fmt.Println("\n🕵️ Suspicious IPs:")
-		for ip := range suspiciousIPs {
-			fmt.Println(ip)
+		for ip, reasons := range suspiciousIPs {
+			fmt.Printf("%s => %s\n", ip, strings.Join(reasons, ", "))
 		}
 	},
 }
