@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go *)",
+      "Bash(./ln *)",
+      "Bash(./wordpress-log-analyzer *)"
+    ]
+  },
+  "$version": 3
+}
