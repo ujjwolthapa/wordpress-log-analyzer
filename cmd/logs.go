@@ -36,6 +36,7 @@ var logsCmd = &cobra.Command{
 		scanner := bufio.NewScanner(f)
 		for scanner.Scan() {
 			line := scanner.Text()
+			lower := strings.ToLower(line) // Define 'lower' once here
 
 			// Split line into parts
 			parts := strings.Split(line, " ")
@@ -64,7 +65,7 @@ var logsCmd = &cobra.Command{
 			}
 
 			// Suspicious paths
-			suspiciousPatterns := []string{".env", "../", "..\\", "phpmyadmin"}
+			suspiciousPatterns := []string{".env", "../", "..\\", "phpmyadmin", "xmlrpc.php", "wp-config.php"}
 			for _, pattern := range suspiciousPatterns {
 				if strings.Contains(strings.ToLower(request), pattern) {
 					suspiciousIPs[ip] = true
@@ -73,18 +74,71 @@ var logsCmd = &cobra.Command{
 			}
 
 			// Optional: detect SQL injection attempts
-			lower := strings.ToLower(line)
-			if strings.Contains(lower, "union select") || strings.Contains(lower, "' or 1=1") {
+			if strings.Contains(lower, "union select") ||
+				strings.Contains(lower, "' or 1=1") ||
+				strings.Contains(lower, "' or '1'='1") ||
+				strings.Contains(lower, "union all select") ||
+				strings.Contains(lower, "information_schema") ||
+				strings.Contains(lower, "sleep(") ||
+				strings.Contains(lower, "benchmark(") ||
+				strings.Contains(lower, "order by") {
 				fmt.Println("💀 SQL Injection attempt from:", ip)
 				suspiciousIPs[ip] = true
 			}
 
-			// Optional: detect path traversal
-			if strings.Contains(request, "../") {
-				fmt.Println("📁 Path traversal attempt from:", ip)
+			// Optional: detect path traversal / LFI
+			if strings.Contains(request, "../") ||
+				strings.Contains(lower, "/etc/passwd") ||
+				strings.Contains(lower, "c:\\windows\\system32") ||
+				strings.Contains(lower, "/proc/self/environ") ||
+				strings.Contains(lower, "/var/log/apache2/access.log") ||
+				strings.Contains(lower, "../../../../") { // Deeper traversal
+				fmt.Println("📁 Path traversal/LFI attempt from:", ip)
 				suspiciousIPs[ip] = true
 			}
-		}
+
+			// Optional: detect XSS attempts
+			if strings.Contains(lower, "<script>") ||
+				strings.Contains(lower, "%3cscript%3e") || // URL encoded
+				strings.Contains(lower, "onerror=") ||
+				strings.Contains(lower, "javascript:") ||
+				strings.Contains(lower, "alert(") ||
+				strings.Contains(lower, "onmouseover=") ||
+				strings.Contains(lower, "data:text/html") {
+				fmt.Println("💉 XSS attempt from:", ip)
+				suspiciousIPs[ip] = true
+			}
+
+			// Optional: detect Remote File Inclusion (RFI) attempts
+			if (strings.Contains(lower, "http://") || strings.Contains(lower, "https://")) &&
+				(strings.Contains(lower, "?file=") || strings.Contains(lower, "?page=") ||
+					strings.Contains(lower, "?url=") || strings.Contains(lower, "?include=")) {
+				fmt.Println("☁️ RFI attempt from:", ip)
+				suspiciousIPs[ip] = true
+			}
+
+			// Optional: detect RCE (Remote Code Execution) / Command Injection attempts
+			if strings.Contains(lower, "cmd=") ||
+				strings.Contains(lower, "exec=") ||
+				strings.Contains(lower, "system=") ||
+				strings.Contains(lower, "passthru(") ||
+				strings.Contains(lower, "shell_exec(") ||
+				strings.Contains(lower, "phpinfo()") ||
+				strings.Contains(lower, "wget ") ||
+				strings.Contains(lower, "curl ") ||
+				strings.Contains(lower, ";") || // Command separator
+				strings.Contains(lower, "|") || // Pipe
+				strings.Contains(lower, "&&") { // Logical AND
+				fmt.Println("💻 RCE/Command Injection attempt from:", ip)
+				suspiciousIPs[ip] = true
+			}
+
+			// Optional: detect WordPress debug log access
+			if strings.Contains(lower, "debug.log") {
+				fmt.Println("🐛 WordPress debug log access attempt from:", ip)
+				suspiciousIPs[ip] = true
+			}
+        }
 
 		// ---- SORT TOP IPS ----
 		type kv struct {
