@@ -17,6 +17,7 @@ import (
 
 // file flag
 var file string
+var mu sync.Mutex
 
 // IPInfo holds geolocation information for an IP
 type IPInfo struct {
@@ -98,11 +99,15 @@ func enrichIPs(ips []string, maxConcurrent int) map[string]*IPInfo {
 			// Geolocation
 			info, err := getIPInfo(ip)
 			if err != nil {
+				mu.Lock()
 				results[ip] = &IPInfo{IP: ip, Org: "Unknown", City: "Unknown"}
+				mu.Unlock()
 				return
 			}
 			info.Org = fmt.Sprintf("%s (%s)", info.Org, hostname)
+			mu.Lock()
 			results[ip] = info
+			mu.Unlock()
 		}(ip)
 	}
 
